@@ -1,0 +1,135 @@
+---
+title: "LogisticRegression_FRA.R"
+author: "Prasanta Panja"
+date: "3 December 2017"
+output: html_document
+---
+
+##Importing Libraries
+
+```{r setup, include=FALSE}
+# install.packages("caTools")
+# install.packages("DMwR")
+
+library("xlsx")
+library("car")
+library("RColorBrewer")
+library("dplyr")
+library("DMwR")
+library("caTools")
+library("ROCR")
+```
+
+## Settingup working directory and Reading training data
+
+```{r}
+setwd("C:/Users/Prasanta/Downloads/PGPBABI/FRA/GA")
+train <- read.xlsx("training.xlsx",sheetName = "training")
+```
+
+## Training Data Preparation
+## Populating NA's of NumberofDependents 
+
+```{r}
+train1 <- train %>% filter(NumberOfDependents != 'NA')
+train2 <- train %>% filter(NumberOfDependents == 'NA')
+
+sd(as.numeric(as.character((train1$NumberOfDependents))))
+mean(as.numeric(as.character((train1$NumberOfDependents))))
+train2$NumberOfDependents <- ceiling(rnorm(142,.74,1.10))
+train2$NumberOfDependents <- ifelse(train2$NumberOfDependents < 0,0,train2$NumberOfDependents)
+train1$NumberOfDependents <- as.numeric(as.character(train1$NumberOfDependents))
+train3 <- rbind(train1,train2)
+```
+## Scaling of data (RevolvingUtilizationOfUnsecuredLines and DebtRatio)
+```{r}
+train4 <- train3
+
+train4$NumberOfDependents <- as.numeric(as.character(train4$NumberOfDependents))
+
+train4SD2yrs0 <- train4 %>% filter(SeriousDlqin2yrs == 0)
+train4SD2yrs1 <- train4 %>% filter(SeriousDlqin2yrs == 1)
+
+train4SD2yrs0$ScaledRUOfUnsecuredLines <- as.vector(scale(train4SD2yrs0$RevolvingUtilizationOfUnsecuredLines))
+train4SD2yrs0$ScaledDebtRatio <- as.vector(scale(train4SD2yrs0$DebtRatio))
+
+train4SD2yrs1$ScaledRUOfUnsecuredLines <- as.vector(scale(train4SD2yrs1$RevolvingUtilizationOfUnsecuredLines))
+train4SD2yrs1$ScaledDebtRatio <- as.vector(scale(train4SD2yrs1$DebtRatio))
+
+train5 <- rbind(train4SD2yrs0,train4SD2yrs1)
+train5 <- train5[-c(1,3,4)]
+```
+## Model Building
+```{r}
+table(train5$SeriousDlqin2yrs)
+
+model <- glm(SeriousDlqin2yrs~., data = train5, family = "binomial")
+
+summary(model)
+```
+
+## Test Data Preparation
+## Populating NA's of NumberofDependents 
+
+```{r}
+test <- read.xlsx("test.xlsx",sheetName = "test")
+test1 <- test %>% filter(NumberOfDependents != 'NA')
+test2 <- test %>% filter(NumberOfDependents == 'NA')
+
+sd(as.numeric(as.character((test1$NumberOfDependents))))
+mean(as.numeric(as.character((test1$NumberOfDependents))))
+test2$NumberOfDependents <- ceiling(rnorm(20,.73,1.08))
+test2$NumberOfDependents <- ifelse(test2$NumberOfDependents < 0,0,test2$NumberOfDependents)
+test1$NumberOfDependents <- as.numeric(as.character(test1$NumberOfDependents))
+test3 <- rbind(test1,test2)
+```
+## Scaling of data (RevolvingUtilizationOfUnsecuredLines and DebtRatio)
+```{r}
+test4 <- test3
+
+test4$NumberOfDependents <- as.numeric(as.character(test4$NumberOfDependents))
+
+test4SD2yrs0 <- test4 %>% filter(SeriousDlqin2yrs == 0)
+test4SD2yrs1 <- test4 %>% filter(SeriousDlqin2yrs == 1)
+
+test4SD2yrs0$ScaledRUOfUnsecuredLines <- as.vector(scale(test4SD2yrs0$RevolvingUtilizationOfUnsecuredLines))
+test4SD2yrs0$ScaledDebtRatio <- as.vector(scale(test4SD2yrs0$DebtRatio))
+
+test4SD2yrs1$ScaledRUOfUnsecuredLines <- as.vector(scale(test4SD2yrs1$RevolvingUtilizationOfUnsecuredLines))
+test4SD2yrs1$ScaledDebtRatio <- as.vector(scale(test4SD2yrs1$DebtRatio))
+
+test5 <- rbind(test4SD2yrs0,test4SD2yrs1)
+test5 <- test5[-c(1,3,4)]
+```
+## Model validation without SMOTING
+```{r}
+predictTest <- predict(model, type = "response", newdata = test5)
+predictClass <- predictTest > 0.3
+confusion_matrix <- table(test5$SeriousDlqin2yrs,predictClass)
+confusion_matrix
+```
+## SMOTING training data
+```{r}
+train5$SeriousDlqin2yrs <- as.factor(train5$SeriousDlqin2yrs)
+train5SMOTED <- SMOTE(SeriousDlqin2yrs~.,train5,perc.over=500,perc.under=300)
+table(train5SMOTED$SeriousDlqin2yrs)
+traintmp <- train5SMOTED
+traintmp$SeriousDlqin2yrs <- as.numeric(as.character(traintmp$SeriousDlqin2yrs))
+sum(as.numeric(traintmp$SeriousDlqin2yrs))/nrow(traintmp)
+```
+## Model validation with SMOTING
+```{r}
+train5$SeriousDlqin2yrs <- as.numeric(as.character(train5$SeriousDlqin2yrs))
+modelSMOTED <- glm(SeriousDlqin2yrs~., data = train5SMOTED, family = "binomial")
+summary(modelSMOTED)
+predictTestSMOTED <- predict(modelSMOTED, type = "response", newdata = test5)
+predictClassSM <- predictTestSMOTED > 0.3
+confusion_matrixSM <- table(test5$SeriousDlqin2yrs,predictClassSM)
+confusion_matrixSM
+```
+## ROC curve with SMOTING
+```{r}
+ROCRpred <- prediction(predictTestSMOTED, test5$SeriousDlqin2yrs)
+ROCRperf <- performance(ROCRpred, "tpr", "fpr")
+plot(ROCRperf, colorize = TRUE, print.cutoffs.at = seq(0,1,0.1), text.adj = c(-0.2, 1.7))
+```
